@@ -57,6 +57,7 @@ import requests
 from bs4 import BeautifulSoup
 import google.generativeai as genai
 from fastapi.middleware.cors import CORSMiddleware
+from typing import List, Optional
 
 # Set up Gemini
 GEMINI_API_KEY = "AIzaSyCwdDvKqc-W9Ucmve5tU2OemneMPvymVEA"
@@ -111,26 +112,65 @@ async def query_gemini(request: QueryRequest):
     return {"response": response.text}
 
 # 🔎 /news — Legal news from TOI
-@app.get("/news")
-async def get_legal_news():
-    url = "https://timesofindia.indiatimes.com/topic/Legal/news"
+class NewsHeadline(BaseModel):
+    text: str
+    link: str
+    image: Optional[str] = None
+
+def get_toi_news():
+    url = "https://timesofindia.indiatimes.com/topic/law"
+    
     try:
         response = requests.get(url)
-        response.raise_for_status()  # Ensure we handle failed requests
-        soup = BeautifulSoup(response.content, "html.parser")
-
-        # Select the articles correctly (verify selector if needed)
-        articles = soup.select("._3T5do > a")[:5]
-        news = []
-        for article in articles:
-            title = article.get_text(strip=True)
-            link = "https://timesofindia.indiatimes.com" + article["href"]
-            news.append({"title": title, "link": link})
-
-        if not news:
-            return {"error": "No legal news found."}
-
-        return {"legal_news": news}
-
+        response.raise_for_status()  # Raise exception for non-200 status codes
     except requests.exceptions.RequestException as e:
-        return {"error": f"Error fetching news: {str(e)}"}
+        print(f"Error fetching news: {e}")
+        return []
+
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    headlines = []
+    for item in soup.find_all('div', class_='uwU81'):
+        link_tag = item.find('a')
+        if not link_tag:
+            continue
+            
+        headline_text = link_tag.find('span').get_text(strip=True) if link_tag.find('span') else ''
+        
+        # Handle relative URLs by adding base URL if needed
+        headline_link = link_tag['href'] if 'href' in link_tag.attrs else ''
+        if headline_link and not headline_link.startswith('http'):
+            headline_link = f"https://timesofindia.indiatimes.com{headline_link}"
+            
+        image_tag = link_tag.find('img')
+        image_url = image_tag['src'] if image_tag and 'src' in image_tag.attrs else ''
+        
+        headlines.append({
+            'text': headline_text,
+            'link': headline_link,
+            'image': image_url
+        })
+    
+    print(f"Fetched {len(headlines)} headlines")  # Debug line
+    return headlines
+
+@app.get("/news")
+async def news():
+    """Returns law-related news headlines from Times of India"""
+    headlines = get_toi_news()
+
+    formatted_news = [
+        {
+            "title": item["text"],
+            "link": item["link"],
+            "image": item.get("image", "")  # Include image, default to empty string
+        }
+        for item in headlines
+    ]
+
+    return {"legal_news": formatted_news}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)
